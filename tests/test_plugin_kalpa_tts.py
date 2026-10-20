@@ -157,6 +157,8 @@ async def test_barge_in_before_flush_discards_buffered_text() -> None:
         await stream.aclose()
         await asyncio.sleep(0.2)
         assert await _speak(tts, "The next reply.") > 0
+    # text reaches the API as it arrives, so audio can start before the reply ends
+    assert {"type": "sendText", "text": "Half a sentence that"} in fake.received
     assert fake.flushed == ["The next reply."]
     assert fake.connections == 1
 
