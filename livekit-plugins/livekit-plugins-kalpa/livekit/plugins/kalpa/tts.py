@@ -43,9 +43,10 @@ from .models import TTSModels
 
 BASE_URL = "https://api.kalpalabs.ai"
 DEFAULT_VOICE = "18c26f49-9f9c-400c-bec9-7467f28e1db5"  # Arjun
+# LiveKit resamples to the pipeline's rate, so the plugin always requests this one
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-# The API closes a socket after 300 s without a client message; pooled sockets retire before that.
+# Pooled sockets retire before the API's idle timeout closes them.
 MAX_IDLE_SECONDS = 240
 # How long an interrupted response may take to acknowledge its cancel before its socket is dropped.
 CANCEL_ACK_TIMEOUT = 1.0
@@ -136,6 +137,7 @@ class TTS(tts.TTS):
                         "type": "initializeConnection",
                         "api_key": self._opts.api_key,
                         "model": self._opts.model,
+                        "sample_rate": SAMPLE_RATE,
                         # audio starts at the first complete sentences, before the reply's flush
                         "generation_config": {},
                     }
@@ -250,7 +252,11 @@ class ChunkedStream(tts.ChunkedStream):
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}/v1/tts/{self._opts.voice}/stream",
                 headers={"Authorization": f"Bearer {self._opts.api_key}"},
-                json={"text": self._input_text, "model": self._opts.model},
+                json={
+                    "text": self._input_text,
+                    "model": self._opts.model,
+                    "sample_rate": SAMPLE_RATE,
+                },
                 timeout=aiohttp.ClientTimeout(
                     sock_connect=self._conn_options.timeout, sock_read=self._conn_options.timeout
                 ),

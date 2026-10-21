@@ -9,7 +9,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.plugins import kalpa
 
 pytestmark = pytest.mark.unit
@@ -68,6 +68,10 @@ class FakeKalpa:
                     )
                 if self.ack_cancel:
                     await ws.send_json({"type": "cancelled"})
+        if generation:
+            generation.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await generation
         return ws
 
     async def _respond(self, ws: web.WebSocketResponse, *, silent: bool) -> None:
@@ -130,6 +134,7 @@ async def test_replies_share_one_socket() -> None:
     assert fake.connections == 1
     assert fake.flushed == ["Hello there.", "", "Hello again."]
     assert fake.received[0]["generation_config"] == {}
+    assert fake.received[0]["sample_rate"] == 24000
 
 
 @pytest.mark.parametrize("ack_cancel", [True, False])
@@ -168,10 +173,14 @@ async def test_timeout_counts_from_the_flush() -> None:
     async with serve(fake) as tts:
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
         stream.push_text("A reply from a slow LLM.")
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.8)  # a pause before the flush does not count
         stream.end_input()
         async with stream:
             assert len([ev async for ev in stream]) > 0
+
+        fake.delay = 3.0  # the API goes silent after the flush
+        with pytest.raises(APITimeoutError):
+            await asyncio.wait_for(_speak(tts, "Hello there."), 2.5)
 
 
 @pytest.mark.parametrize(
@@ -197,5 +206,9 @@ async def test_synthesize_streams_pcm_over_http() -> None:
         with pytest.raises(APIStatusError) as exc:
             await tts.synthesize("Hello there.", conn_options=NO_RETRY).collect()
     assert frame.duration == pytest.approx(1.0, abs=0.02)
-    assert fake.received[0] == {"text": "Hello there.", "model": "kalpa-tts-1"}
+    assert fake.received[0] == {
+        "text": "Hello there.",
+        "model": "kalpa-tts-1",
+        "sample_rate": 24000,
+    }
     assert exc.value.status_code == 503
